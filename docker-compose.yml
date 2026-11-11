@@ -1,0 +1,12 @@
+services:
+  restic:
+    image: restic/restic:0.19.1
+    hostname: restic-backup
+    restart: "no"
+    network_mode: none
+    environment:
+      RESTIC_PASSWORD_FILE: /run/secrets/restic.password
+    volumes:
+      - /workspace/sites:/stacks:ro
+      - /workspace/backup-repositories:/repositories
+      - /workspace/backup-secrets/restic.password:/run/secrets/restic.password:ro
