@@ -82,8 +82,20 @@ Include exactly one `docker-stop` directive:
 
 - `docker-stop=true`: record the stack's container states, stop running containers, take the backup, and attempt to restart those same containers. Containers already stopped remain stopped.
 - `docker-stop=false`: require the stack's containers to be stopped before taking the backup.
+- `docker-stop=skip`: back up the declared paths without inspecting, stopping or restarting application containers. No Compose file is required. Suitable for ordinary directories, stable media or completed database dumps; consistency of files modified during the backup is your responsibility.
 
-The scripts expect each stack's Compose file to be named `docker-compose.yml`.
+The directive is mandatory and must appear exactly once, with one of these three values. For `true` and `false`, the scripts expect each stack's Compose file to be named `docker-compose.yml`. With `skip`, Docker is still required to run the Restic image, but the application itself need not use Docker.
+
+### Preload large media before a cold backup
+
+For example, first back up stable video files with the application running, using this `.backup` in the same stack directory:
+
+```text
+docker-stop=skip
+data/www/varie
+```
+
+After that run finishes, change the descriptor to `docker-stop=true` and include **all** required paths, including `data/www/varie`, then run `--backup` again. The final snapshot includes only the paths declared in this second run; it does not automatically merge paths from previous snapshots. Using the same repository allows Restic to reuse existing data blocks. It may still reread the large files when the selected paths change, so measure the actual downtime. Do not edit the descriptor while a backup is running. `skip` should not be used to acquire live database files.
 
 ## Back up
 
@@ -101,6 +113,16 @@ sudo bash stacks-backup.sh --backup
 ```
 
 Choose an operation explicitly; running without one shows help. `--check` does **not** perform a Restic data integrity check. `--backup` initializes missing repositories automatically, so a separate `--init` run is optional.
+
+To process only one stack, add `--stack NAME`. The name identifies an immediate subdirectory of `STACKS_DIR`; keep `STACKS_DIR` pointing at the parent directory. The option works with all three operations, before or after the operation, and can be combined with `--config`:
+
+```bash
+sudo bash stacks-backup.sh -c backup.env --stack traefik-proxy --check
+sudo bash stacks-backup.sh -c backup.env --stack traefik-proxy --init
+sudo bash stacks-backup.sh -c backup.env --stack traefik-proxy --backup
+```
+
+Other stacks are not validated, initialized or backed up during these runs. Missing, inaccessible or symlinked selected directories, and missing or invalid `.backup` descriptors, are errors. Use a name, not a filesystem path. Without `--stack`, all enabled immediate subdirectories are processed as before. The selected stack's `docker-stop` policy still applies: use `skip` to back up Traefik configuration while its containers remain active.
 
 Backup diagnostics go to stderr. Structured events are emitted as JSON Lines on stdout at the end of the run:
 
@@ -128,6 +150,35 @@ Restores use Restic's `--verify` option and write into a new directory under `RE
 
 The listing label `DISPONIBILE` means a snapshot exists in Restic; it does not certify repository integrity or a successful restore.
 
+## Native Restic commands
+
+`run-restic.sh` prepares the same configuration and image, optionally mounts a selected repository and password, then passes a native command directly to Restic. It does not inspect `.backup`, require a source stack directory, or manage application containers. Backup and restore orchestration remain in the specialist scripts.
+
+```bash
+sudo bash run-restic.sh help
+sudo bash run-restic.sh version
+sudo bash run-restic.sh --stack traefik-proxy ls --long latest
+sudo bash run-restic.sh -c backup.env --stack traefik-proxy ls --long 18b4ff19
+sudo bash run-restic.sh --stack traefik-proxy snapshots
+sudo bash run-restic.sh --stack traefik-proxy check --read-data
+```
+
+Place `--config`/`-c` and optional `--stack NAME` **before** the native command. Everything from the command onward, including `--help` or `--config`, is passed unchanged to Restic. `--stack` selects a repository under `REPOSITORIES_DIR`. Without it, no repository or password is mounted or passed to Restic: commands like `help` and `version` work without them, while commands requiring a repository report their native error. The wrapper does not select or search repositories automatically. To find available names, list your configured `REPOSITORIES_DIR` on the host (for example, `sudo ls /opt/.backup/repositories`) and use a name with `--stack`. Configuration precedence and automatic image download are the same as in the other scripts. With no arguments or wrapper `--help`, usage is printed without contacting Docker.
+
+The wrapper refuses these commands before preparing Docker:
+
+| Command | Alternative |
+| --- | --- |
+| `backup` | `stacks-backup.sh --stack NAME --backup` |
+| `init` | `stacks-backup.sh --stack NAME --init` |
+| `restore` | `stacks-restore.sh NAME --snapshot ID\|latest` |
+| `mount` | Unsupported: additional mounts and privileges would be required |
+| `self-update` | Configure `RESTIC_IMAGE` instead |
+
+Other command names and options are validated by Restic without spelling corrections. Native stdout and stderr are streamed directly; the wrapper does not append JSONL events or capture native diagnostics in its private log files. Restic's exit status is returned (Docker startup errors return Docker's status). Image/configuration preparation errors return status 2. There is no wrapper execution timeout on the native command; configured Docker/pull timeouts apply only to preparation.
+
+Only the selected repository and password are mounted. File arguments refer to paths **inside the container**, not arbitrary host paths. Repository operations such as `forget`, `prune`, `unlock` and `repair` are not blocked: their normal Restic behavior applies. Native `check` verifies repository integrity, unlike the specialist `stacks-backup.sh --check`, which validates backup configuration and repository access.
+
 ## Validation and limits
 
 Check shell syntax and run the simulated lifecycle checks:
@@ -136,6 +187,9 @@ Check shell syntax and run the simulated lifecycle checks:
 bash -n stacks-backup.sh stacks-restore.sh tests/backup-lifecycle.sh
 bash tests/backup-lifecycle.sh
 bash tests/json-handling.sh
+bash tests/skip-policy.sh
+bash tests/stack-selection.sh
+bash tests/run-restic.sh
 ```
 
 The lifecycle checks simulate Docker operations. They cover container state preservation, stop timeout handling, unclean exits, restart retries, initialization order, and recovery after backup failure. They do not establish readiness for production.

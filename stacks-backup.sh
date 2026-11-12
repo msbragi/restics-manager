@@ -176,35 +176,74 @@ record_error() {
 usage() {
   cat <<'HELP'
 Usage:
-  sudo bash stacks-backup.sh [-c FILE | --config FILE] --check
-  sudo bash stacks-backup.sh [-c FILE | --config FILE] --init
-  sudo bash stacks-backup.sh [-c FILE | --config FILE] --backup
+  sudo bash stacks-backup.sh [-c FILE | --config FILE] [--stack NAME] --check
+  sudo bash stacks-backup.sh [-c FILE | --config FILE] [--stack NAME] --init
+  sudo bash stacks-backup.sh [-c FILE | --config FILE] [--stack NAME] --backup
   bash stacks-backup.sh --help
 
 Options:
   -c, --config FILE  Configuration file (overrides BACKUP_CONFIG).
                     Default: backup.env alongside the scripts.
+  --stack NAME      Process only STACKS_DIR/NAME; requires its .backup file.
+                    Without this option, process all enabled stacks.
   --check           Validate descriptors and open repository configurations.
                     Does not check data integrity.
   --init            Initialize missing repositories without taking snapshots.
   --backup          Initialize missing repositories, then back up enabled stacks.
                     Stop/recover running containers when docker-stop=true.
+                    docker-stop=skip bypasses application container management.
   -h, --help        Show this help. No operation also shows help.
 
 Examples:
   sudo bash stacks-backup.sh --config .backup-test.env --check
   sudo bash stacks-backup.sh -c backup.env --backup
+  sudo bash stacks-backup.sh -c backup.env --stack traefik-proxy --check
+  sudo bash stacks-backup.sh --stack traefik-proxy --init
+  sudo bash stacks-backup.sh --stack traefik-proxy --backup
 HELP
 }
 
 # --- Preconditions --------------------------------------------------------
 parse_arguments() {
-  if (($# != 1)); then
+  local -a operations=()
+  SELECTED_STACK=""
+  while (($#)); do
+    case "$1" in
+      --stack)
+        if (($# < 2)) || [[ -z "$2" || "$2" == -* ]]; then
+          printf 'ERROR: --stack requires a stack name\n' >&2
+          usage >&2
+          return 2
+        fi
+        if [[ -n "$SELECTED_STACK" ]]; then
+          printf 'ERROR: specify --stack only once\n' >&2
+          usage >&2
+          return 2
+        fi
+        SELECTED_STACK="$2"
+        shift 2 ;;
+      --stack=*)
+        if [[ -n "$SELECTED_STACK" || -z "${1#*=}" ]]; then
+          printf 'ERROR: specify --stack once with a nonempty stack name\n' >&2
+          usage >&2
+          return 2
+        fi
+        SELECTED_STACK="${1#*=}"
+        shift ;;
+      *) operations+=("$1"); shift ;;
+    esac
+  done
+  if [[ -n "$SELECTED_STACK" && ( "$SELECTED_STACK" == */* || "$SELECTED_STACK" == .* || "$SELECTED_STACK" == -* || "$SELECTED_STACK" =~ [[:cntrl:]] ) ]]; then
+    printf 'ERROR: --stack must name one immediate stack directory, without a path\n' >&2
+    usage >&2
+    return 2
+  fi
+  if ((${#operations[@]} != 1)); then
     printf 'ERROR: specify exactly one operation\n' >&2
     usage >&2
     return 2
   fi
-  MODE="$1"
+  MODE="${operations[0]}"
   case "$MODE" in
     --check|--init|--backup|auto) ;;
     *) printf 'ERROR: unknown operation: %s\n' "$MODE" >&2; usage >&2; return 2 ;;
@@ -544,8 +583,8 @@ inspect_stack() {
     emit_event 'include' "$name" 'ok' "$line"
   done < "$descriptor"
 
-  if ((stop_seen != 1)) || [[ "$stop_value" != true && "$stop_value" != false ]]; then
-    record_error "$name" 'docker-stop=true|false must appear exactly once'
+  if ((stop_seen != 1)) || [[ "$stop_value" != true && "$stop_value" != false && "$stop_value" != skip ]]; then
+    record_error "$name" 'docker-stop=true|false|skip must appear exactly once'
   else
     log_info "  Docker stop: $stop_value"
     emit_event 'docker_stop_policy' "$name" 'ok' "$stop_value"
@@ -573,12 +612,26 @@ run_check() {
     record_error '' 'stack directory inaccessible or linked'
     return 1
   fi
-  shopt -s nullglob
-  for stack in "$STACKS_DIR"/*/; do
-    [[ -d "$stack" ]] || continue
-    name="$(basename "$stack")"
+  if [[ -n "${SELECTED_STACK:-}" ]]; then
+    name="$SELECTED_STACK"
+    stack="$STACKS_DIR/$name/"
+    if ! safe_directory "$stack"; then
+      record_error "$name" 'selected stack directory missing, inaccessible or linked'
+      return 1
+    fi
+    if [[ ! -e "$stack.backup" && ! -L "$stack.backup" ]]; then
+      record_error "$name" 'selected stack has no .backup descriptor'
+      return 1
+    fi
     inspect_stack "$stack" "$name"
-  done
+  else
+    shopt -s nullglob
+    for stack in "$STACKS_DIR"/*/; do
+      [[ -d "$stack" ]] || continue
+      name="$(basename "$stack")"
+      inspect_stack "$stack" "$name"
+    done
+  fi
   if ((ENABLED == 0)); then
     record_error '' 'no enabled stacks; no work can be verified'
   fi
@@ -853,7 +906,7 @@ collect_backup_paths() {
     line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == docker-stop=* ]]; then
       stop_count=$((stop_count + 1))
-      [[ "$line" == docker-stop=false || "$line" == docker-stop=true ]] || return 1
+      [[ "$line" == docker-stop=false || "$line" == docker-stop=true || "$line" == docker-stop=skip ]] || return 1
       continue
     fi
     [[ "$line" != *=* ]] || { record_error "$name" 'unknown descriptor directive'; return 1; }
@@ -874,15 +927,15 @@ collect_backup_paths() {
 }
 
 backup_stack() {
-  local name="$1" result=0 start=$SECONDS snapshot_id hash_after
+  local name="$1" policy="${2:-false}" result=0 start=$SECONDS snapshot_id hash_after
   local -a paths
   collect_backup_paths "$name" || return 1
   # Recheck immediately before each acquisition, not only before the entire batch.
-  ensure_stack_stopped "$name" || return 1
+  if [[ "$policy" != skip ]]; then ensure_stack_stopped "$name" || return 1; fi
   paths=("${BACKUP_PATHS[@]}")
   emit_event backup_started "$name" started "paths=${#paths[@]}"
   run_engine "$name" backup "$RESTIC_BACKUP_TIMEOUT" backup --json --host "$name" "${paths[@]}" || result=$?
-  ensure_stack_stopped "$name" || result=1
+  if [[ "$policy" != skip ]]; then ensure_stack_stopped "$name" || result=1; fi
   if ((result == 0)); then
     # Parse stdout alone; stderr is separate and cannot break the JSON stream.
     if ! snapshot_id="$(jq -ers '
@@ -942,8 +995,8 @@ run_backup_targets() {
     name="${BACKUP_TARGETS[$i]}"
     if [[ "${BACKUP_STOP_FLAGS[$i]}" == true ]]; then
       snapshot_stack "$name" || overall=1
-    elif ! ensure_stack_stopped "$name"; then
-      overall=1
+    elif [[ "${BACKUP_STOP_FLAGS[$i]}" == false ]]; then
+      ensure_stack_stopped "$name" || overall=1
     fi
   done
   ((overall == 0)) || return 1
@@ -963,8 +1016,10 @@ run_backup_targets() {
         continue
       fi
     fi
-    backup_stack "$name" || overall=1
-    restore_stack || return 1
+    backup_stack "$name" "${BACKUP_STOP_FLAGS[$i]}" || overall=1
+    if [[ "${BACKUP_STOP_FLAGS[$i]}" == true ]]; then
+      restore_stack || return 1
+    fi
   done
   if ((overall)); then
     emit_event 'backup_summary' '' 'error' 'one or more backups failed'

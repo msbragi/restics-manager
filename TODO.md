@@ -1,5 +1,30 @@
 # TODO — Backup Docker con Restic
 
+## Wrapper nativo separato — 12 novembre 2026
+
+- [x] Creare run-restic.sh senza modificare stacks-backup.sh o stacks-restore.sh; riusare initialize_config, controlli percorsi e detect_restic dal modulo esistente.
+- [x] Supportare --stack NAME facoltativo e --config/-c prima del comando nativo; inoltrare comando e argomenti come array senza correzioni o eval. Senza selettore non montare repository/password: help/version funzionano, gli errori per repository mancante sono demandati a Restic.
+- [x] Bloccare backup/init/restore con rimando agli script specialistici, oltre a mount e self-update non supportati.
+- [x] Preparare immagine e mount repository/password; esporre direttamente stdout, stderr ed exit code nativi, senza gestione applicativa o dipendenze dai .backup.
+- [x] Aggiornare help e README e verificare sintassi e tests/run-restic.sh con Docker simulato: blocchi preventivi, precedenza config, argomenti con spazi, stream/exit code e pull solo quando necessario.
+- [ ] Collaudo dell'utente: run-restic.sh --stack traefik-proxy ls --long latest e comando non valido; nessun Docker reale eseguito dall'agente.
+
+## Selezione singolo stack — 12 novembre 2026
+
+- [x] Aggiungere --stack NAME a --check, --init e --backup, combinabile con --config e indipendente dall'ordine degli argomenti.
+- [x] Selezionare esclusivamente STACKS_DIR/NAME; errore per directory o descrittore mancanti, link, nomi non sicuri e selettori duplicati. Senza selettore mantenere ricerca normale.
+- [x] Aggiornare help e README e aggiungere tests/stack-selection.sh con fixture simulate, senza Docker.
+- [ ] Collaudo dell'utente con --stack traefik-proxy --check, --init e --backup, usando docker-stop=skip per lasciare attivo Traefik.
+
+## Modalità docker-stop=skip — 12 novembre 2026
+
+- [x] Accettare esattamente una direttiva docker-stop=true|false|skip; mantenere errore per direttiva assente, duplicata o non valida.
+- [x] Con skip evitare Compose e controlli/lifecycle dei container applicativi, anche prima/dopo Restic; conservare controlli percorsi, hash descrittore e gestione repository.
+- [x] Conservare true (stop/recupero) e false (container già fermi); Docker resta necessario per eseguire Restic.
+- [x] Aggiungere test simulato mirato e documentare precaricamento media seguito da snapshot completo nello stesso repository.
+- [x] Verificare sintassi e test simulato tests/skip-policy.sh: skip senza Compose e senza gestione applicativa, direttive invalide rifiutate, protezioni true/false conservate.
+- [ ] Collaudo dell'utente: skip su cartella senza Compose e su media con sito attivo, poi backup completo con true. Misurare il fermo effettivo. Nessun test Docker eseguito dall'agente.
+
 ## Configurazione da riga di comando e help — 12 novembre 2026
 
 - [x] Aggiungere --config FILE / -c FILE a backup e restore, anche dopo l'operazione, con precedenza su BACKUP_CONFIG.
