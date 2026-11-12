@@ -1,6 +1,2 @@
-backup.env
-backup-secrets/
-backup-repositories/
-backup-logs/
-restores/
+backup-test.env
 *.jsonl

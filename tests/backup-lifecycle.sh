@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 # Load definitions without executing the CLI or installing exit traps.
 source <(sed '/^if \[\[.*BASH_SOURCE\[0\]/,$d' "$(dirname "$0")/../stacks-backup.sh")
+initialize_config
 RUN_TEMP=$(mktemp -d)
 trap 'rm -rf "$RUN_TEMP"' EXIT
 DOCKER_OUTPUT="$RUN_TEMP/output"

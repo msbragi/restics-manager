@@ -1,5 +1,31 @@
 # TODO — Backup Docker con Restic
 
+## Configurazione da riga di comando e help — 12 novembre 2026
+
+- [x] Aggiungere --config FILE / -c FILE a backup e restore, anche dopo l'operazione, con precedenza su BACKUP_CONFIG.
+- [x] Mostrare usage ed esempi senza leggere configurazioni né contattare Docker quando mancano operazioni o viene richiesto --help/-h.
+- [x] Validare argomenti prima della configurazione; segnalare opzioni errate, operazioni incomplete e file mancanti.
+- [x] Aggiornare README e inizializzazione delle fixture esistenti.
+- [x] Verificare sintassi e controlli CLI senza Docker: help con configurazione inesistente, config senza operazione, opzioni errate e precedenza CLI su ambiente.
+- [ ] Collaudo dell'utente di backup e restore tramite --config/-c.
+
+## Configurazione unica e Restic Docker — 12 novembre 2026
+
+- [x] Unificare percorsi, immagine e timeout in backup.env; aggiungere backup.env.example senza modificare la configurazione locale dell'utente.
+- [x] Eliminare il Compose Restic ridondante e il backend Restic nativo; conservare i Compose degli stack.
+- [x] Controllare Docker e immagine prima delle operazioni; scaricare RESTIC_IMAGE solo quando manca, con RESTIC_PULL_TIMEOUT separato (600 s), e verificare nuovamente prima di procedere.
+- [x] Segnalare immediatamente un BACKUP_CONFIG esplicito inesistente e aggiornare README.
+- [ ] Collaudo dell'utente: immagine presente, immagine assente/pull, errore pull, backup e restore con percorsi personalizzati. Nessun comando Docker eseguito dall'agente.
+
+## Refactor Bash e utility Linux — 11 novembre 2026
+
+- [x] Rimuovere Python dai requisiti e da tutte le operazioni di backup/restore.
+- [x] Usare jq per validazione JSON Compose/Restic, selezione snapshot e percorsi di restore; usare date per le date UTC.
+- [x] Redigere password letterali e JSON-escaped con Bash e jq, senza passarle negli argomenti dei processi; rifiutare diagnostica binaria con NUL.
+- [x] Aggiornare README e aggiungere tests/json-handling.sh.
+- [x] Verificare sintassi, regressione lifecycle e test JSON/redazione/selezione snapshot/percorsi restore/summary backup senza Docker reale.
+- [ ] Collaudo regressioni reale dell'utente su backup, elenco e restore.
+
 Aggiornato: 11 novembre 2026
 
 ## Priorità: fix shutdown Apache/PHP-FPM in produzione
@@ -52,7 +78,8 @@ Lo script è incluso nel backup attraverso `config/`. Ricreare il container dopo
 
 ## Prossimo lavoro: affidabilità prima dell’automazione
 
-- [ ] Correggere il recupero dopo timeout stop: `docker start` e una verifica immediata running non dimostrano che la richiesta stop nel daemon sia terminata. Non dichiarare recupero stabile sulla sola verifica attuale.
+- [x] Correggere il recupero dopo timeout stop: mantenere il client stop attivo oltre DOCKER_TIMEOUT e attendere conferma di completamento, con STOP_RECOVERY_TIMEOUT (default 120 s). Backup annullato al primo timeout; restart automatico solo dopo esito stop confermato. In caso incerto, rifiutare restart anche nei trap e segnalare ID per recupero manuale.
+- [ ] Collaudare sul campo stop normale, completamento durante recupero e scadenza di entrambi i limiti; istruzioni e risultati attesi nel README. Validare anche INT/TERM durante lo stop e gli errori del daemon. Implementazione verificata solo per sintassi; collaudo affidato all'utente.
 - [ ] Collaudare realmente errori/timeout Restic, cleanup e interruzioni INT/TERM in un ambiente di prova dedicato.
 - [ ] Collaudare stack docker-stop=true con container inizialmente running e stopped insieme: quelli stopped devono rimanere spenti.
 - [ ] Verificare ordine dipendenze e disponibilità applicativa dopo riavvio: running non equivale a servizio pronto.
