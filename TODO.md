@@ -7,14 +7,15 @@
 - [x] Bloccare backup/init/restore con rimando agli script specialistici, oltre a mount e self-update non supportati.
 - [x] Preparare immagine e mount repository/password; esporre direttamente stdout, stderr ed exit code nativi, senza gestione applicativa o dipendenze dai .backup.
 - [x] Aggiornare help e README e verificare sintassi e tests/run-restic.sh con Docker simulato: blocchi preventivi, precedenza config, argomenti con spazi, stream/exit code e pull solo quando necessario.
-- [ ] Collaudo dell'utente: run-restic.sh --stack traefik-proxy ls --long latest e comando non valido; nessun Docker reale eseguito dall'agente.
+- [x] Collaudo dell’utente: ls dello snapshot Traefik e check/check --read-data della copia ioss con configurazione separata.
+- [ ] Verifica sul campo di un comando nativo non valido e relativo exit code; coperto dai test simulati.
 
 ## Selezione singolo stack — 12 novembre 2026
 
 - [x] Aggiungere --stack NAME a --check, --init e --backup, combinabile con --config e indipendente dall'ordine degli argomenti.
 - [x] Selezionare esclusivamente STACKS_DIR/NAME; errore per directory o descrittore mancanti, link, nomi non sicuri e selettori duplicati. Senza selettore mantenere ricerca normale.
 - [x] Aggiornare help e README e aggiungere tests/stack-selection.sh con fixture simulate, senza Docker.
-- [ ] Collaudo dell'utente con --stack traefik-proxy --check, --init e --backup, usando docker-stop=skip per lasciare attivo Traefik.
+- [x] Collaudo dell’utente con --stack traefik-proxy --check, --init idempotente e --backup con skip: uno stack selezionato, snapshot creato, exit 0.
 
 ## Modalità docker-stop=skip — 12 novembre 2026
 
@@ -23,7 +24,8 @@
 - [x] Conservare true (stop/recupero) e false (container già fermi); Docker resta necessario per eseguire Restic.
 - [x] Aggiungere test simulato mirato e documentare precaricamento media seguito da snapshot completo nello stesso repository.
 - [x] Verificare sintassi e test simulato tests/skip-policy.sh: skip senza Compose e senza gestione applicativa, direttive invalide rifiutate, protezioni true/false conservate.
-- [ ] Collaudo dell'utente: skip su cartella senza Compose e su media con sito attivo, poi backup completo con true. Misurare il fermo effettivo. Nessun test Docker eseguito dall'agente.
+- [x] Collaudo dell’utente: precaricamento media ioss con skip e sito attivo, exit 0; successivo backup completo con true, exit 0, recupero degli stessi container. Intervallo stop/recupero circa 80 s, tempo totale 1m26.518s; disponibilità HTTP non cronometrata.
+- [ ] Collaudo sul campo di una cartella applicativa senza Compose; già coperto dal test simulato.
 
 ## Configurazione da riga di comando e help — 12 novembre 2026
 
@@ -32,11 +34,12 @@
 - [x] Validare argomenti prima della configurazione; segnalare opzioni errate, operazioni incomplete e file mancanti.
 - [x] Aggiornare README e inizializzazione delle fixture esistenti.
 - [x] Verificare sintassi e controlli CLI senza Docker: help con configurazione inesistente, config senza operazione, opzioni errate e precedenza CLI su ambiente.
-- [ ] Collaudo dell'utente di backup e restore tramite --config/-c.
+- [x] Collaudo dell’utente di restore e wrapper tramite -c con configurazione separata per il cliente.
+- [ ] Collaudo sul campo di --backup con -c dopo il refactor CLI; test simulati presenti.
 
 ## Configurazione unica e Restic Docker — 12 novembre 2026
 
-- [x] Unificare percorsi, immagine e timeout in backup.env; aggiungere backup.env.example senza modificare la configurazione locale dell'utente.
+- [x] Unificare percorsi, immagine e timeout in backup.env versionato e commentato; template .example rimosso. Password in file separato.
 - [x] Eliminare il Compose Restic ridondante e il backend Restic nativo; conservare i Compose degli stack.
 - [x] Controllare Docker e immagine prima delle operazioni; scaricare RESTIC_IMAGE solo quando manca, con RESTIC_PULL_TIMEOUT separato (600 s), e verificare nuovamente prima di procedere.
 - [x] Segnalare immediatamente un BACKUP_CONFIG esplicito inesistente e aggiornare README.
@@ -49,9 +52,9 @@
 - [x] Redigere password letterali e JSON-escaped con Bash e jq, senza passarle negli argomenti dei processi; rifiutare diagnostica binaria con NUL.
 - [x] Aggiornare README e aggiungere tests/json-handling.sh.
 - [x] Verificare sintassi, regressione lifecycle e test JSON/redazione/selezione snapshot/percorsi restore/summary backup senza Docker reale.
-- [ ] Collaudo regressioni reale dell'utente su backup, elenco e restore.
+- [x] Collaudo reale dell’utente su backup, elenco, restore, avvio MariaDB/Apache e risposta HTTP della copia recuperata; verifiche di errore ulteriori restano elencate sotto.
 
-Aggiornato: 11 novembre 2026
+Aggiornato: 12 novembre 2026
 
 ## Priorità: fix shutdown Apache/PHP-FPM in produzione
 
@@ -71,15 +74,15 @@ Lo script è incluso nel backup attraverso `config/`. Ricreare il container dopo
 ## Ambiente e limiti
 
 - Collaudo: WSL, `/workspace`; stack in `/workspace/sites`.
-- Produzione: VPS cliente, `/opt`; stack previsti in `/opt/stacks`.
-- Continuare i test su WSL; non distribuire l’orchestratore sperimentale in produzione.
-- Nessun intervento sulla VPS eseguito durante questo lavoro.
+- Installazione e collaudo dell’utente sulla VPS cliente: script `/opt/restic-manager`, stack `/opt/stacks`, repository/secret/log sotto `/opt/.backup`, restore sotto `/opt/.restores`.
+- Proseguire i test di errore in ambiente dedicato: il collaudo riuscito non copre tutti i guasti.
+- L’agente non ha eseguito interventi sulla VPS; operazioni e prove reali sono state eseguite dall’utente.
 - L’agente non ha accesso al socket Docker: i test Docker reali sono stati eseguiti dall’utente.
 
 ## Funzionalità implementate
 
 - [x] Repository Restic separato per stack, password comune per ambiente, descrittore `.backup` opt-in.
-- [x] `.backup` elenca percorsi relativi da includere; include automaticamente se stesso; richiede una sola direttiva `docker-stop=true|false`.
+- [x] `.backup` elenca percorsi relativi da includere; include automaticamente se stesso; richiede una sola direttiva `docker-stop=true|false|skip`.
 - [x] Orchestratore `stacks-backup.sh`: `--check`, `--init`, `--backup`; diagnostica umana su stderr e JSONL su stdout a fine esecuzione.
 - [x] `--backup` inizializza automaticamente repository mancanti dopo il preflight globale, sotto lock; riusa quelli esistenti e interrompe se init fallisce.
 - [x] Percorsi configurabili tramite `backup.env`; Restic Docker `restic/restic:0.19.1`.
@@ -88,7 +91,7 @@ Lo script è incluso nel backup attraverso `config/`. Ricreare il container dopo
 - [x] Lock invocazioni concorrenti, controlli link/permessi e hash del descrittore prima/dopo il backup.
 - [x] `docker-stop=false`: rifiuta il backup se Compose riporta container attivi o stati non riconosciuti.
 - [x] `docker-stop=true`: registra ID/stato, ferma solo i container running, verifica uscita pulita senza OOM e ripristina gli ID inizialmente running. Non usa compose up e non crea servizi.
-- [x] Recupero tentato dopo errori e nei trap EXIT/INT/TERM; errori di restart espliciti e ID conservati per nuovo tentativo. Recupero dopo timeout stop ancora da rafforzare.
+- [x] Recupero tentato dopo errori e nei trap EXIT/INT/TERM; errori di restart espliciti e ID conservati per nuovo tentativo. Attesa tracciata dopo timeout implementata e provata nei tre scenari normali; INT/TERM ed errori daemon ancora da collaudare.
 - [x] Stop con `--timeout -1` per evitare force-kill dell’applicazione; attesa client limitata da DOCKER_TIMEOUT. Verifica container spenti prima e dopo Restic.
 
 ## Collaudi completati
@@ -104,24 +107,27 @@ Lo script è incluso nel backup attraverso `config/`. Ricreare il container dopo
 ## Prossimo lavoro: affidabilità prima dell’automazione
 
 - [x] Correggere il recupero dopo timeout stop: mantenere il client stop attivo oltre DOCKER_TIMEOUT e attendere conferma di completamento, con STOP_RECOVERY_TIMEOUT (default 120 s). Backup annullato al primo timeout; restart automatico solo dopo esito stop confermato. In caso incerto, rifiutare restart anche nei trap e segnalare ID per recupero manuale.
-- [ ] Collaudare sul campo stop normale, completamento durante recupero e scadenza di entrambi i limiti; istruzioni e risultati attesi nel README. Validare anche INT/TERM durante lo stop e gli errori del daemon. Implementazione verificata solo per sintassi; collaudo affidato all'utente.
+- [x] Collaudo sul campo dell’utente: stop normale, completamento durante recupero e scadenza di entrambi i limiti sullo stack timeout; idle rimasto Created, slow recuperato o lasciato spento secondo il caso.
+- [ ] Validare INT/TERM durante stop e gli errori del daemon. Evento container_recovery_required duplicato nel flusso principale e nel trap EXIT: pulizia diagnostica ancora da fare.
 - [ ] Collaudare realmente errori/timeout Restic, cleanup e interruzioni INT/TERM in un ambiente di prova dedicato.
 - [ ] Collaudare stack docker-stop=true con container inizialmente running e stopped insieme: quelli stopped devono rimanere spenti.
 - [ ] Verificare ordine dipendenze e disponibilità applicativa dopo riavvio: running non equivale a servizio pronto.
 - [ ] Escludere writer esterni sui percorsi inclusi: processi host, altri stack e automazioni concorrenti. Le verifiche prima/dopo non impediscono scritture o restart esterni durante il backup.
-- [ ] Eseguire `restic check --read-data` sul repository ioss: restore --verify controlla i file dello snapshot, non tutto il repository.
+- [x] Eseguire check e check --read-data sulla copia remota ioss: 2 snapshot, 636/636 pack letti in 1m13s, nessun errore.
 - [ ] Verificare conservazione ACL se richiesta per il deployment; non ancora collaudata esplicitamente.
 
 SIGKILL, crash host o daemon indisponibile possono richiedere recupero manuale. L’orchestratore non è ancora considerato pronto per la produzione.
 
 ## Passaggi successivi
 
-- [ ] Replica verso repository remoti separati (`restic copy`), gestione errori e protezione degli snapshot locali non ancora replicati.
+- [x] Replica manuale rsync dei repository cifrati verso PC/WSL e VPS: 11.075.029.127 byte; VPS 5m04s a 34,63 MB/s, exit 0; passaggio successivo senza modifiche quasi immediato.
+- [ ] Automatizzare replica, coordinamento lock con backup/prune, gestione errori e propagazione cancellazioni. Scelta definitiva fra rsync e restic copy ancora aperta.
 - [ ] Retention: ipotesi iniziale 7 giornalieri, 4 settimanali; definire politica prima di implementarla.
 - [ ] Controlli integrità e prove periodiche di ripristino completo.
 - [ ] Rotazione dei log privati prima dell’automazione.
 - [ ] Timer systemd come root, journald, notifiche e futura integrazione Uptime Kuma.
-- [ ] Documentare recupero password fuori dalla VPS, immagini/versioni necessarie e procedura di disaster recovery.
+- [x] Documentare password separata, copia manuale rsync, configurazione dedicata e sequenza check/restore in INSTALL e README.
+- [ ] Automatizzare e completare la procedura di disaster recovery, inclusi prerequisiti esterni degli stack.
 
 ## Evidenze e snapshot di riferimento
 
@@ -147,7 +153,7 @@ SIGKILL, crash host o daemon indisponibile possono richiedere recupero manuale. 
 - [ ] Confermare ritorno allo stack originale ioss dopo il test.
 - [ ] Verificare se esistono ancora e rimuovere quando non servono le sole copie di restore: `/workspace/restore-nospace-7e0ed3b8-3viVS6`, `/workspace/restore-nospace-d6c8c2e1-Bjrcam`, `/workspace/restore-ioss-3b5ec120-khFgte`. Prima fermare eventuali container che usano la copia; operazione manuale con sudo su WSL.
 - [x] Vecchio backup-audit/, backup-check.jsonl e backup-run.jsonl rimossi su richiesta precedente; successivi test possono aver ricreato backup-run.jsonl.
-- Conservare orchestratore, Compose, backup.env, repository/snapshot, password e dati originali.
+- Conservare script, Compose degli stack, backup.env, repository/snapshot, password e dati originali. Il Compose dedicato a Restic è stato eliminato.
 
 ## Helper restore — 11 novembre 2026
 
@@ -156,8 +162,18 @@ SIGKILL, crash host o daemon indisponibile possono richiedere recupero manuale. 
 - `--list NAME`: date, stato AVAILABLE e ID completi. AVAILABLE indica presenza elencata da Restic, non integrità o restore già verificati.
 - `NAME --snapshot ID|latest`: risolve ID completo (prefisso minimo 8 caratteri, non ambiguo), crea nuova directory privata sotto RESTORE_DIR, restore --verify senza mount originali e senza avviare container. Mantiene file parziali se fallisce.
 - [x] Sintassi e test simulati: elenco distinto, dettagli snapshot, rifiuto nome non sicuro, errore motore; regressione lifecycle superata.
-- [ ] Collaudo reale WSL di elenco e restore tramite helper ancora necessario.
+- [x] Collaudo reale WSL dell’utente: elenco e restore del repository ioss copiato dal cliente; avvio MariaDB/Apache e HTTP 200 con HTML Joomla IOSS.
 - Verifica timeout lifecycle resta il prossimo lavoro, sospesa per introdurre l’helper restore richiesto.
 
 - [x] RESTORE_DIR configurabile in backup.env (default BACKUP_ROOT/restores), attuale /workspace/restores. Directory base creata automaticamente se assente, sottocartelle private uniche; percorsi con symlink rifiutati. Restore precedenti non spostati.
-- [x] Restore helper: elimina i livelli ridondanti stacks/NAME usando la sintassi Restic ID:sottocartella. Radice ricavata dai paths dello snapshot tramite .backup (supporta backup Docker e host); rifiuta paths esterni alla radice. Contenuti direttamente in RESTORE_DIR/restore-NAME-ID-casuale/. Collaudo reale della nuova disposizione ancora necessario.
+- [x] Restore helper: elimina i livelli ridondanti stacks/NAME usando la sintassi Restic ID:sottocartella. Radice ricavata dai paths dello snapshot tramite .backup (supporta backup Docker e host); rifiuta paths esterni alla radice. Contenuti direttamente in RESTORE_DIR/restore-NAME-ID-casuale/. Nuova disposizione collaudata dall’utente nel restore WSL del 12 novembre.
+
+## Recupero da copia cliente — 12 novembre 2026
+
+- Snapshot completo ioss: `1d59fe88f7b85bc94592f0f8780882be31bad8cdd332a00d58afe79d19585b4a`.
+- Backup completo: exit 0, durata 1m26.518s; inizio stop circa 09:17:39 UTC, stessi ID confermati running entro 09:18:59 UTC.
+- Copia rsync su VPS verificata con check e check --read-data senza errori.
+- Copia sul disco C: usata come sorgente per restore in WSL, con password cliente separata.
+- Permessi della directory esterna di restore adeguati manualmente; contenuti lasciati con proprietari/permessi originali. Rete esterna web-proxy creata manualmente.
+- MariaDB ready for connections, Apache avviato, curl verso container: HTTP 200 e HTML Joomla con titolo Ioss GmbH. Non verificati login, tutte le funzioni o tutti i contenuti.
+- [ ] Confermare arresto e pulizia della copia di prova prima di eliminare i file; non dedurre l’avvenuto arresto dal solo comando scritto in chat.

@@ -1,8 +1,10 @@
 # Restics Manager
 
-Bash scripts for local Restic backups of Docker Compose stacks. Each stack opts in through a `.backup` file and gets a separate encrypted Restic repository. Repositories share the password configured for the environment.
+Bash scripts for local Restic backups of Docker Compose stacks and ordinary application directories using `docker-stop=skip`. Each stack opts in through a `.backup` file and gets a separate encrypted Restic repository. Repositories share the password configured for the environment.
 
 **Status: experimental.** See [TODO.md](TODO.md) for validation results and remaining work before production use.
+
+For a short VPS installation checklist and recommended layout, see [INSTALL.md](INSTALL.md).
 
 ## Requirements
 
@@ -15,7 +17,7 @@ The host needs `jq` for JSON processing, including when Restic runs in Docker. P
 
 The scripts run on the host and start temporary Restic containers directly. No Compose service for Restic is needed, and a host Restic executable is not used. Site Compose files remain necessary for stack lifecycle operations. Paths, image and timeouts are configured in `backup.env`; the password stays in the separate secret file referenced there.
 
-**Docker is required by both scripts**, including repository checks, snapshot listings and restores. Installing the standalone Restic binary on the host does not remove this requirement: the scripts currently invoke Restic exclusively through Docker.
+**Docker is required by all three scripts**, including repository checks, snapshot listings and restores. Installing the standalone Restic binary on the host does not remove this requirement: the scripts currently invoke Restic exclusively through Docker.
 
 Using standalone Restic requires code changes to replace the container invocations and map container paths to host paths. A configuration change alone is not sufficient. For backups of Docker Compose stacks, Docker and Compose would still be needed to inspect, stop and restart application containers, even with a standalone Restic backend. Running the scripts entirely without Docker would require adapting that stack lifecycle logic as well. These standalone modes are not currently implemented.
 
@@ -33,12 +35,12 @@ Edit the included `backup.env` to match your machine's paths. This file is versi
 Use literal, absolute paths without shell quotes or variable expansion. For example:
 
 ```dotenv
-BACKUP_ROOT=/opt/restics-manager
+BACKUP_ROOT=/opt/.backup
 STACKS_DIR=/opt/stacks
-REPOSITORIES_DIR=/opt/restics-manager/backup-repositories
-RESTIC_PASSWORD_FILE=/opt/restics-manager/backup-secrets/restic.password
-BACKUP_LOG_DIR=/opt/restics-manager/backup-logs
-RESTORE_DIR=/opt/restics-manager/restores
+REPOSITORIES_DIR=/opt/.backup/repositories
+RESTIC_PASSWORD_FILE=/opt/.backup/secrets/restic.password
+BACKUP_LOG_DIR=/opt/.backup/logs
+RESTORE_DIR=/opt/.restores
 RESTIC_IMAGE=restic/restic:0.19.1
 RESTIC_PULL_TIMEOUT=600
 RESTIC_CHECK_TIMEOUT=60
@@ -62,7 +64,7 @@ With no arguments, with only a configuration option, or with `--help`/`-h`, the 
 
 Before check, initialization, backup, listing or restore, the scripts verify Docker access and the configured image. If the image is missing, they run `docker pull` with a separate `RESTIC_PULL_TIMEOUT` (default 600 seconds), then verify it again. Pull output goes to stderr. Failure stops the operation before application containers are stopped. A present image is reused without checking for updates. `--help` does not contact Docker. Actual Restic containers use `--network none` and `--pull never`; only the preparation step downloads images. Thus the first `--check` may download an image even though it does not take a backup.
 
-Backup secrets, repositories, logs, restores, and JSONL output are excluded by `.gitignore` when stored in the default locations. `backup.env` is included in the repository.
+`backup.env` is versioned and must contain no secret values. Keep repositories, passwords, logs and restores outside the project directory as in the layout above. `.hidden` and JSONL files are ignored by Git; custom files such as `cliente.env` outside `.hidden` are not automatically excluded. Never commit the Restic password.
 
 ## Select what to back up
 
@@ -76,7 +78,7 @@ config
 data
 ```
 
-Each path is relative to the stack directory and must exist and be readable. Absolute paths, parent traversal, and symlink path components are rejected. Blank lines and comments are allowed. The `.backup` file itself is included automatically. Stacks without this file are skipped.
+Each path is relative to the stack directory and must exist and be readable. Absolute paths, parent traversal, and symlink path components are rejected. Blank lines and comments are allowed. The `.backup` file itself is included automatically. Stacks without this file are skipped during normal discovery. Only immediate subdirectories of `STACKS_DIR` are searched, regardless of the current working directory. Comments must occupy their own lines; commenting out a path excludes it from future snapshots, without removing its data from older snapshots.
 
 Include exactly one `docker-stop` directive:
 
@@ -127,10 +129,12 @@ Other stacks are not validated, initialized or backed up during these runs. Miss
 Backup diagnostics go to stderr. Structured events are emitted as JSON Lines on stdout at the end of the run:
 
 ```bash
-sudo bash stacks-backup.sh --backup > backup-run.jsonl
+sudo bash stacks-backup.sh --backup > ~/backup-run.jsonl
 ```
 
 Check the command's exit status and diagnostics. Engine diagnostics are retained in the configured private log directory.
+
+Shell redirections run as the calling user, before sudo. Save JSONL output in a writable directory such as your home when the script directory is root-owned.
 
 ## Restore
 
@@ -146,7 +150,7 @@ sudo bash stacks-restore.sh demo --snapshot latest
 sudo bash stacks-restore.sh demo --snapshot SNAPSHOT_ID
 ```
 
-Restores use Restic's `--verify` option and write into a new directory under `RESTORE_DIR`, such as `restore-demo-ID-RANDOM`. Stack contents are placed directly inside that directory. The restore script prints the destination and snapshot ID; it does not start containers or overwrite the original stack. Failed restores retain partial files for inspection.
+Restores use Restic's `--verify` option and write into a new directory under `RESTORE_DIR`, such as `restore-demo-ID-RANDOM`. Stack contents are placed directly inside that directory. The restore script prints the destination and snapshot ID; it does not start containers or overwrite the original stack. Failed restores retain partial files for inspection. The outer restore directory is created with mode `700`, owned by the invoking user (root when using sudo); contents retain their saved ownership and permissions. Adjust access to the outer directory for deployment as needed, rather than recursively changing owners of database and web data. External Docker networks and required images must be available separately when starting the restored application.
 
 The listing label `DISPONIBILE` means a snapshot exists in Restic; it does not certify repository integrity or a successful restore.
 
@@ -169,8 +173,8 @@ The wrapper refuses these commands before preparing Docker:
 
 | Command | Alternative |
 | --- | --- |
-| `backup` | `stacks-backup.sh --stack NAME --backup` |
-| `init` | `stacks-backup.sh --stack NAME --init` |
+| `backup` | `stacks-backup.sh [--stack NAME] --backup` |
+| `init` | `stacks-backup.sh [--stack NAME] --init` |
 | `restore` | `stacks-restore.sh NAME --snapshot ID\|latest` |
 | `mount` | Unsupported: additional mounts and privileges would be required |
 | `self-update` | Configure `RESTIC_IMAGE` instead |
@@ -178,6 +182,44 @@ The wrapper refuses these commands before preparing Docker:
 Other command names and options are validated by Restic without spelling corrections. Native stdout and stderr are streamed directly; the wrapper does not append JSONL events or capture native diagnostics in its private log files. Restic's exit status is returned (Docker startup errors return Docker's status). Image/configuration preparation errors return status 2. There is no wrapper execution timeout on the native command; configured Docker/pull timeouts apply only to preparation.
 
 Only the selected repository and password are mounted. File arguments refer to paths **inside the container**, not arbitrary host paths. Repository operations such as `forget`, `prune`, `unlock` and `repair` are not blocked: their normal Restic behavior applies. Native `check` verifies repository integrity, unlike the specialist `stacks-backup.sh --check`, which validates backup configuration and repository access.
+
+## Manual off-site copy and recovery
+
+Run rsync **from the receiving PC/VPS**, pulling the complete encrypted repositories from the source. Keep the SSH private key on the receiving machine. The source account needs read/traverse access to repositories, but not the Restic password. A dedicated group can provide read access while the password stays root-only. New repository files may need their group permissions reapplied after backup or pruning; this is not automated by the scripts.
+
+Prepare a writable destination, then transfer when no source backup, pruning or other repository modification is running. Timing the copy an hour later is not a concurrency lock: coordination is currently manual. Do not modify or check the destination repository while rsync is updating it.
+
+```bash
+sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 700 /opt/.recovery/cliente
+rsync -a --no-owner --no-group --info=progress2 \
+  -e "ssh -p 2222" \
+  USER@SOURCE_HOST:/opt/.backup/repositories/ \
+  /opt/.recovery/cliente/
+echo $?
+```
+
+Replace the host, user and port (use 22 for standard SSH). The source's trailing slash copies repository directories directly into the destination. A repeat run normally skips files with unchanged size and modification time; that quick comparison is not an integrity check. No `--delete` is used. Deletion propagation and retention are not implemented: do not treat repeated rsync copies as an independent snapshot retention policy, particularly after source pruning/repacking.
+
+The same procedure works from WSL to a destination such as `/mnt/c/Data/_Backups/Cliente/repositories/`; storage on C: avoids using WSL's virtual disk for the repository. Restores can use a separate Linux directory. Filesystem performance and Unix permission behavior on Windows-backed paths differ from Linux.
+
+Keep the client's password separately, with restricted permissions, and use a separate configuration for recovery rather than changing the receiving VPS's own backup settings. For example, `.hidden/cliente.env` can contain:
+
+```dotenv
+REPOSITORIES_DIR=/opt/.recovery/cliente
+RESTIC_PASSWORD_FILE=/absolute/path/to/cliente.password
+RESTORE_DIR=/absolute/path/to/restore-tests
+```
+
+The first two settings suffice for repository commands; `RESTORE_DIR` controls where restore tests write decrypted files. In WSL use the actual `/mnt/c/...` repository path. The password must match the source repositories; a new password cannot decrypt an existing copy.
+
+```bash
+sudo bash run-restic.sh -c .hidden/cliente.env --stack ioss check
+sudo bash run-restic.sh -c .hidden/cliente.env --stack ioss check --read-data
+sudo bash stacks-restore.sh -c .hidden/cliente.env --list ioss
+sudo bash stacks-restore.sh -c .hidden/cliente.env ioss --snapshot latest
+```
+
+`check --read-data` reads all repository data. A restore with `--verify`, followed by an isolated application startup and HTTP test, adds evidence of actual recoverability. Keep restored data separate from live stacks; creating an external network alone does not provide a reverse proxy or publish HTTP ports. Repository transfer, integrity verification and application testing are separate steps.
 
 ## Validation and limits
 
@@ -194,9 +236,11 @@ bash tests/run-restic.sh
 
 The lifecycle checks simulate Docker operations. They cover container state preservation, stop timeout handling, unclean exits, restart retries, initialization order, and recovery after backup failure. They do not establish readiness for production.
 
+User field tests on 12 November 2026 covered single-stack Traefik backup with `skip`, media preloading while the site stayed active, and a subsequent complete ioss backup with `true` (exit 0; 1m26.518s total; about 80s from stop initiation to both containers confirmed running). An off-site repository copy passed `check --read-data` on all 636 packs. A separate WSL restore subsequently started Apache/MariaDB and returned HTTP 200 with the expected Joomla page. These results verify the exercised recovery path, not every application feature or failure scenario.
+
 Known limits tracked in [TODO.md](TODO.md):
 
-- If stop exceeds `DOCKER_TIMEOUT`, the backup is cancelled while the same stop client is given up to `STOP_RECOVERY_TIMEOUT` additional seconds to finish. Only a successful stop completion permits automatic recovery. An error, lost connection, or expired recovery deadline leaves the outcome uncertain: the script reports container IDs for manual recovery and refuses automatic restart. The daemon may still be processing the request. Field validation is pending.
+- If stop exceeds `DOCKER_TIMEOUT`, the backup is cancelled while the same stop client is given up to `STOP_RECOVERY_TIMEOUT` additional seconds to finish. Only a successful stop completion permits automatic recovery. An error, lost connection, or expired recovery deadline leaves the outcome uncertain: the script reports container IDs for manual recovery and refuses automatic restart. The daemon may still be processing the request. Normal stop, completion during recovery and expiry of both deadlines have been exercised on a disposable stack; signal and daemon-failure scenarios remain open.
 - SIGKILL, host crashes, or Docker daemon failures may require manual recovery.
 - A container returning to `running` does not establish application readiness or correct dependency startup order.
 - External processes must not write to included paths or restart containers during a backup.
